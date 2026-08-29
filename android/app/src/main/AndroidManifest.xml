@@ -1,0 +1,68 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
+
+    <!-- Loopback socket only. Still required: Android gates all socket creation on it. -->
+    <uses-permission android:name="android.permission.INTERNET" />
+
+    <!--
+      All files access. Reaches every path under /storage/emulated/0 EXCEPT
+      /Android/data and /Android/obb, which stay walled off on API 30+ regardless
+      of this permission. Reaching those needs Shizuku or root; see docs/limits.md.
+      Granted through Settings.ACTION_MANAGE_ALL_FILES_ACCESS_PERMISSION, not a
+      runtime dialog. Play Store restricts publishing with it; sideloading is fine.
+    -->
+    <uses-permission android:name="android.permission.MANAGE_EXTERNAL_STORAGE"
+        tools:ignore="ScopedStorage" />
+
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <uses-permission android:name="android.permission.WAKE_LOCK" />
+    <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
+
+    <application
+        android:allowBackup="false"
+        android:label="@string/app_name"
+        android:supportsRtl="true"
+        android:theme="@style/Theme.Afs">
+
+        <activity
+            android:name=".ui.MainActivity"
+            android:exported="true"
+            android:label="@string/app_name">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+
+        <!--
+          foregroundServiceType=specialUse, after ruling out the alternatives:
+
+          - connectedDevice REQUIRES one of BLUETOOTH_*/NFC/UWB/CHANGE_WIFI_STATE/
+            CHANGE_NETWORK_STATE, or a claimed UsbDevice/UsbAccessory. Our "connected
+            device" is on the far end of an adb socket, which the platform cannot see,
+            so it throws SecurityException at startForeground(). Declaring an unused
+            permission such as CHANGE_NETWORK_STATE would satisfy the check, but
+            claiming a capability we never exercise is the wrong trade.
+          - dataSync fits semantically but Android 15 caps it at 6 hours per 24h and
+            then force-stops the service, which would drop a mounted drive out from
+            under Explorer mid-copy.
+
+          specialUse is the category for exactly this: a legitimate long-running case
+          that matches none of the predefined types. It has no timeout, and it needs
+          no permission we do not genuinely use. Distributing on Play would require a
+          justification for it; sideloading does not.
+        -->
+        <service
+            android:name=".net.AfsService"
+            android:exported="false"
+            android:foregroundServiceType="specialUse">
+            <property
+                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="Serves shared storage to a USB-attached computer while a drive is mounted." />
+        </service>
+
+    </application>
+</manifest>

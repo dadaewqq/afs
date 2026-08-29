@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">AFS Server</string>
+    <string name="channel_name">File server</string>
+    <string name="notif_title">AFS server running</string>
+    <string name="notif_text">Listening on 127.0.0.1:%1$d</string>
+</resources>

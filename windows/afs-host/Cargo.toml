@@ -1,0 +1,44 @@
+[package]
+name = "afs-host"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.77"
+description = "WinFsp host for the AFS Android file service"
+build = "build.rs"
+
+[dependencies]
+anyhow = "1"
+clap = { version = "4", features = ["derive"] }
+log = "0.4"
+env_logger = "0.11"
+
+# Ctrl+C must run our shutdown path rather than killing the process: an abrupt
+# exit skips both the unmount and the adb-forward teardown, leaving a dead drive
+# letter behind.
+ctrlc = "3"
+
+# NOTE ON LICENSING: winfsp-rs is GPL-3.0, and WinFsp itself is GPLv3 (a
+# commercial licence is available from its author). Linking against it makes the
+# resulting afs-host binary GPLv3-derived. That is fine for a personal tool;
+# worth knowing before building anything redistributable on top of it.
+#
+# The "system" feature is REQUIRED and is not on by default. Without it,
+# winfsp::winfsp_init() compiles load_system_winfsp() down to an unconditional
+# error and falls back to a bare LoadLibraryW("winfsp-x64.dll"), which searches
+# PATH — where WinFsp's bin directory does not appear. The feature enables the
+# registry lookup of HKLM\SOFTWARE\WOW6432Node\WinFsp\InstallDir instead, which
+# is where the installer actually records itself.
+#
+# Symptom without it: "WinFsp is not installed or could not be loaded",
+# caused by WIN32_ERROR, on a machine where WinFsp is perfectly well installed.
+winfsp = { version = "0.13.1", features = ["system"] }
+
+# Required by the `delayload` feature (on by default via `full`) so build.rs can
+# call winfsp_link_delayload().
+[build-dependencies]
+winfsp = { version = "0.13.1", features = ["build"] }
+
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1
