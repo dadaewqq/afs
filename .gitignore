@@ -1,0 +1,13 @@
+# Local build output and machine configuration
+**/target/
+**/build/
+**/.gradle/
+**/.idea/
+**/local.properties
+dist/
+
+# Keep personal signing material out of the repository
+*.jks
+*.keystore
+*.p12
+*.pfx

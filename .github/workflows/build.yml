@@ -1,0 +1,152 @@
+name: Build AFS
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: afs-build-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  windows:
+    name: Windows x64
+    runs-on: windows-2022
+    timeout-minutes: 30
+    defaults:
+      run:
+        shell: pwsh
+        working-directory: windows/afs-host
+    steps:
+      - name: Checkout
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+
+      - name: Install WinFsp runtime and developer SDK
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $msi = Join-Path $env:RUNNER_TEMP 'winfsp-2.1.25156.msi'
+          Invoke-WebRequest 'https://github.com/winfsp/winfsp/releases/download/v2.1/winfsp-2.1.25156.msi' -OutFile $msi
+          $install = Start-Process msiexec.exe -ArgumentList @('/i', $msi, '/qn', '/norestart', 'ADDLOCAL=ALL') -Wait -PassThru
+          if ($install.ExitCode -notin @(0, 3010)) { throw "WinFsp installer failed: $($install.ExitCode)" }
+          $root = 'C:\Program Files (x86)\WinFsp'
+          foreach ($file in @('bin\winfsp-x64.dll', 'inc\winfsp\winfsp.h', 'lib\winfsp-x64.lib')) {
+            if (-not (Test-Path (Join-Path $root $file))) { throw "WinFsp SDK missing: $file" }
+          }
+          $clang = 'C:\Program Files\LLVM\bin'
+          if (-not (Test-Path (Join-Path $clang 'libclang.dll'))) { throw 'libclang.dll is missing' }
+          "LIBCLANG_PATH=$clang" >> $env:GITHUB_ENV
+
+      - name: Configure Rust stable
+        run: |
+          rustup toolchain install stable --profile minimal
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          rustup default stable
+          rustc --version
+          cargo --version
+
+      - name: Run Rust tests
+        run: cargo test --locked
+
+      - name: Build Windows executable
+        run: cargo build --locked --release
+
+      - name: Verify executable and prepare artifact
+        run: |
+          $ErrorActionPreference = 'Stop'
+          & '.\target\release\afs-host.exe' --help
+          if ($LASTEXITCODE) { throw 'Executable smoke test failed' }
+          $out = Join-Path $env:GITHUB_WORKSPACE 'dist\windows'
+          New-Item -ItemType Directory -Path $out | Out-Null
+          Copy-Item '.\target\release\afs-host.exe' $out
+          foreach ($file in @('README.md', 'INSTALL.md', 'LICENSE')) {
+            Copy-Item (Join-Path $env:GITHUB_WORKSPACE $file) $out
+          }
+          $hash = Get-FileHash (Join-Path $out 'afs-host.exe') -Algorithm SHA256
+          "$($hash.Hash.ToLowerInvariant())  afs-host.exe" | Set-Content (Join-Path $out 'SHA256SUMS.txt') -Encoding ascii
+          "Commit: $env:GITHUB_SHA" | Set-Content (Join-Path $out 'BUILD-COMMIT.txt') -Encoding ascii
+
+      - name: Upload Windows artifact
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: afs-windows-x64
+          path: dist/windows/
+          if-no-files-found: error
+          retention-days: 30
+
+  android:
+    name: Android signed APK
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+
+      - name: Set up Java
+        uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961 # v5
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      - name: Install Android SDK packages
+        shell: bash
+        run: |
+          set -euo pipefail
+          "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" \
+            'platforms;android-36' 'build-tools;36.0.0'
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@7ca78c16c887dc6c5f36fd6d0cb0f5c23d940e69 # v6
+        with:
+          gradle-version: '8.14.3'
+
+      - name: Build release APK and run lint
+        working-directory: android
+        run: gradle :app:assembleRelease :app:lintRelease --no-daemon --stacktrace
+
+      - name: Sign and verify release APK
+        shell: bash
+        env:
+          AFS_KEYSTORE_BASE64: ${{ secrets.AFS_KEYSTORE_BASE64 }}
+          AFS_KEYSTORE_PASSWORD: ${{ secrets.AFS_KEYSTORE_PASSWORD }}
+        run: |
+          set -euo pipefail
+          test -n "$AFS_KEYSTORE_BASE64"
+          test -n "$AFS_KEYSTORE_PASSWORD"
+          keystore="$RUNNER_TEMP/afs-release.p12"
+          trap 'rm -f "$keystore"' EXIT
+          printf '%s' "$AFS_KEYSTORE_BASE64" | base64 --decode > "$keystore"
+          chmod 600 "$keystore"
+          mkdir -p dist/android
+          tools="$ANDROID_HOME/build-tools/36.0.0"
+          "$tools/zipalign" -p -f 4 \
+            android/app/build/outputs/apk/release/app-release-unsigned.apk \
+            "$RUNNER_TEMP/afs-aligned.apk"
+          "$tools/apksigner" sign \
+            --ks "$keystore" --ks-key-alias afs \
+            --ks-pass env:AFS_KEYSTORE_PASSWORD --key-pass env:AFS_KEYSTORE_PASSWORD \
+            --out dist/android/afs-android-release.apk "$RUNNER_TEMP/afs-aligned.apk"
+          "$tools/apksigner" verify --verbose --print-certs dist/android/afs-android-release.apk \
+            | tee dist/android/SIGNATURE.txt
+          (cd dist/android && sha256sum afs-android-release.apk > SHA256SUMS.txt)
+          printf 'Commit: %s\n' "$GITHUB_SHA" > dist/android/BUILD-COMMIT.txt
+
+      - name: Upload Android artifact
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: afs-android-signed
+          path: dist/android/
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Upload lint reports
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: android-lint-reports
+          path: android/app/build/reports/lint-results-release.*
+          if-no-files-found: ignore
+          retention-days: 14
