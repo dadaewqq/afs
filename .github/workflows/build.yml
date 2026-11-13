@@ -4,6 +4,11 @@ on:
   workflow_dispatch:
   push:
     branches: [main]
+    paths:
+      - "windows/**"
+      - "android/**"
+      - "tools/**"
+      - ".github/workflows/build.yml"
 
 permissions:
   contents: read
@@ -75,7 +80,7 @@ jobs:
           name: afs-windows-x64
           path: dist/windows/
           if-no-files-found: error
-          retention-days: 30
+          retention-days: 7
 
   android:
     name: Android signed APK
@@ -140,7 +145,7 @@ jobs:
           name: afs-android-signed
           path: dist/android/
           if-no-files-found: error
-          retention-days: 30
+          retention-days: 7
 
       - name: Upload lint reports
         if: always()
@@ -149,4 +154,4 @@ jobs:
           name: android-lint-reports
           path: android/app/build/reports/lint-results-release.*
           if-no-files-found: ignore
-          retention-days: 14
+          retention-days: 3
